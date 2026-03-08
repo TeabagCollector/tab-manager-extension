@@ -1,6 +1,6 @@
 /**
- * Popup 主逻辑 - 智能分类版本 v0.2.2
- * 修复：只显示有标签的分类，动态监控当前打开的页面
+ * Popup 主逻辑 - 智能分类版本 v0.2.3
+ * 修复：空分类显示问题 + 未分类标签点击跳转
  */
 
 // ========== 工具类 ==========
@@ -46,7 +46,6 @@ class CategoryTree {
     return newNode;
   }
 
-  // 根据路径创建分类（AI返回的路径）
   createCategoryPath(pathStr) {
     const parts = pathStr.split('>').map(p => p.trim()).filter(p => p);
     let currentId = 'root';
@@ -71,7 +70,6 @@ class CategoryTree {
       return false;
     }
 
-    // 先从其他分类中移除
     this.removeTabFromAll(tab.id);
 
     const exists = category.tabs.some(t => t.id === tab.id);
@@ -103,40 +101,29 @@ class CategoryTree {
     removeRecursive(this.root);
   }
 
-  // 获取所有有标签的分类（只返回非空分类）
+  // 获取所有有标签的分类（严格过滤）
   getAllCategories() {
     const categories = [];
     
-    const traverse = (node, level = 0, parentPath = []) => {
-      if (node.id !== 'root') {
-        // 检查这个节点及其子节点是否有标签
-        if (this.hasTabs(node)) {
-          categories.push({
-            ...node,
-            level,
-            path: [...parentPath, node.name]
-          });
+    const traverse = (node, level = 0) => {
+      // 先处理子节点
+      if (node.children && node.children.length > 0) {
+        for (const child of node.children) {
+          traverse(child, level + 1);
         }
       }
       
-      for (const child of node.children) {
-        traverse(child, level + 1, node.id === 'root' ? [] : [...parentPath, node.name]);
+      // 只添加有标签的分类
+      if (node.id !== 'root' && node.tabs && node.tabs.length > 0) {
+        categories.push({
+          ...node,
+          level
+        });
       }
     };
 
     traverse(this.root);
     return categories;
-  }
-
-  // 检查节点及其子节点是否有标签
-  hasTabs(node) {
-    if (node.tabs && node.tabs.length > 0) {
-      return true;
-    }
-    if (node.children) {
-      return node.children.some(child => this.hasTabs(child));
-    }
-    return false;
   }
 
   static fromJSON(json) {
@@ -191,7 +178,7 @@ class StorageManager {
       categories: {
         id: 'root',
         name: '所有标签',
-        children: [], // 空数组，无默认分类
+        children: [],
         tabs: []
       },
       tabs: {},
@@ -204,7 +191,7 @@ class StorageManager {
       },
       cache: {},
       stats: {},
-      version: '0.2.2',
+      version: '0.2.3',
       createdAt: Date.now()
     };
   }
@@ -222,6 +209,7 @@ class TabManager {
 
   async init() {
     await this.loadData();
+    await this.syncCurrentTabs(); // 同步当前标签
     this.render();
     this.bindEvents();
   }
@@ -238,6 +226,47 @@ class TabManager {
     } catch (error) {
       console.error('Failed to load data:', error);
       this.tree = new CategoryTree();
+    }
+  }
+
+  // 同步当前打开的标签，移除已关闭的标签
+  async syncCurrentTabs() {
+    try {
+      const currentTabs = await chrome.tabs.query({ currentWindow: true });
+      const currentTabIds = new Set(currentTabs.map(t => t.id));
+      
+      // 移除已关闭的标签
+      const removeClosedTabs = (node) => {
+        if (node.tabs && node.tabs.length > 0) {
+          node.tabs = node.tabs.filter(tab => currentTabIds.has(tab.id));
+        }
+        if (node.children) {
+          node.children.forEach(child => removeClosedTabs(child));
+        }
+      };
+      
+      removeClosedTabs(this.tree.root);
+      
+      // 更新标签信息（url、title 可能变化）
+      const updateTabInfo = (node) => {
+        if (node.tabs && node.tabs.length > 0) {
+          node.tabs.forEach(savedTab => {
+            const currentTab = currentTabs.find(t => t.id === savedTab.id);
+            if (currentTab) {
+              savedTab.url = currentTab.url;
+              savedTab.title = currentTab.title;
+              savedTab.favIconUrl = currentTab.favIconUrl || null;
+            }
+          });
+        }
+        if (node.children) {
+          node.children.forEach(child => updateTabInfo(child));
+        }
+      };
+      
+      updateTabInfo(this.tree.root);
+    } catch (error) {
+      console.error('Failed to sync tabs:', error);
     }
   }
 
@@ -263,23 +292,25 @@ class TabManager {
     }
 
     container.innerHTML = categories.map(cat => {
-      const tabItems = cat.tabs && cat.tabs.length > 0 
-        ? cat.tabs.map(tab => `
-            <div class="tab-item" data-tab-id="${tab.id}" title="${this.escapeHtml(tab.url)}">
-              <img class="tab-favicon" src="${tab.favIconUrl || 'data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2216%22 height=%2216%22><rect width=%2216%22 height=%2216%22 fill=%22%23ddd%22/></svg>'}" alt="" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2216%22 height=%2216%22><rect width=%2216%22 height=%2216%22 fill=%22%23ddd%22/></svg>'">
-              <span class="tab-title">${this.escapeHtml(tab.title || tab.url)}</span>
-              <span class="tab-close" data-tab-id="${tab.id}">×</span>
-            </div>
-          `).join('')
-        : '';
+      // 确保只显示有标签的分类
+      if (!cat.tabs || cat.tabs.length === 0) {
+        return '';
+      }
 
-      // 只渲染有标签的分类（hasTabs 已在 getAllCategories 中过滤）
+      const tabItems = cat.tabs.map(tab => `
+        <div class="tab-item" data-tab-id="${tab.id}" title="${this.escapeHtml(tab.url)}">
+          <img class="tab-favicon" src="${tab.favIconUrl || 'data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2216%22 height=%2216%22><rect width=%2216%22 height=%2216%22 fill=%22%23ddd%22/></svg>'}" alt="" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2216%22 height=%2216%22><rect width=%2216%22 height=%2216%22 fill=%22%23ddd%22/></svg>'">
+          <span class="tab-title">${this.escapeHtml(tab.title || tab.url)}</span>
+          <span class="tab-close" data-tab-id="${tab.id}">×</span>
+        </div>
+      `).join('');
+
       return `
         <div class="category" data-id="${cat.id}">
           <div class="category-header">
             <span class="category-toggle">▼</span>
             <span class="category-name">${this.escapeHtml(cat.name)}</span>
-            <span class="tab-count">${cat.tabs ? cat.tabs.length : 0}</span>
+            <span class="tab-count">${cat.tabs.length}</span>
           </div>
           <div class="tabs-list">
             ${tabItems}
@@ -363,10 +394,24 @@ class TabManager {
       }
     });
 
-    // 标签点击
+    // 已分类标签点击跳转
     document.getElementById('tree-container').addEventListener('click', async (e) => {
       const tabItem = e.target.closest('.tab-item');
       if (tabItem && !e.target.classList.contains('tab-close')) {
+        const tabId = parseInt(tabItem.dataset.tabId);
+        try {
+          await chrome.tabs.update(tabId, { active: true });
+          window.close();
+        } catch (error) {
+          console.error('Failed to activate tab:', error);
+        }
+      }
+    });
+
+    // 未分类标签点击跳转（关键修复）
+    document.getElementById('uncategorized-tabs').addEventListener('click', async (e) => {
+      const tabItem = e.target.closest('.tab-item');
+      if (tabItem && !e.target.classList.contains('tab-close') && !e.target.classList.contains('btn-classify')) {
         const tabId = parseInt(tabItem.dataset.tabId);
         try {
           await chrome.tabs.update(tabId, { active: true });
@@ -396,7 +441,7 @@ class TabManager {
         const tabId = parseInt(e.target.dataset.tabId);
         try {
           await chrome.tabs.remove(tabId);
-          await this.loadData();
+          await this.syncCurrentTabs(); // 同步标签状态
           this.render();
         } catch (error) {
           console.error('Failed to close tab:', error);
@@ -481,7 +526,6 @@ class TabManager {
     const originalText = btn.textContent;
     
     try {
-      // 获取所有未分类标签
       const tabs = await chrome.tabs.query({ currentWindow: true });
       const categorizedTabIds = new Set();
       
@@ -516,7 +560,6 @@ class TabManager {
       btn.textContent = '⏳ 分类中...';
       btn.disabled = true;
 
-      // 批量分类
       const results = await chrome.runtime.sendMessage({
         action: 'classifyBatch',
         tabs: uncategorizedTabs
