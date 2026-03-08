@@ -1,5 +1,6 @@
 /**
- * Popup 主逻辑 - 智能分类版本 v0.2.1
+ * Popup 主逻辑 - 智能分类版本 v0.2.2
+ * 修复：只显示有标签的分类，动态监控当前打开的页面
  */
 
 // ========== 工具类 ==========
@@ -102,24 +103,40 @@ class CategoryTree {
     removeRecursive(this.root);
   }
 
+  // 获取所有有标签的分类（只返回非空分类）
   getAllCategories() {
     const categories = [];
     
-    const traverse = (node, level = 0) => {
+    const traverse = (node, level = 0, parentPath = []) => {
       if (node.id !== 'root') {
-        categories.push({
-          ...node,
-          level
-        });
+        // 检查这个节点及其子节点是否有标签
+        if (this.hasTabs(node)) {
+          categories.push({
+            ...node,
+            level,
+            path: [...parentPath, node.name]
+          });
+        }
       }
       
       for (const child of node.children) {
-        traverse(child, level + 1);
+        traverse(child, level + 1, node.id === 'root' ? [] : [...parentPath, node.name]);
       }
     };
 
     traverse(this.root);
     return categories;
+  }
+
+  // 检查节点及其子节点是否有标签
+  hasTabs(node) {
+    if (node.tabs && node.tabs.length > 0) {
+      return true;
+    }
+    if (node.children) {
+      return node.children.some(child => this.hasTabs(child));
+    }
+    return false;
   }
 
   static fromJSON(json) {
@@ -174,7 +191,7 @@ class StorageManager {
       categories: {
         id: 'root',
         name: '所有标签',
-        children: [],
+        children: [], // 空数组，无默认分类
         tabs: []
       },
       tabs: {},
@@ -187,7 +204,7 @@ class StorageManager {
       },
       cache: {},
       stats: {},
-      version: '0.2.1',
+      version: '0.2.2',
       createdAt: Date.now()
     };
   }
@@ -256,6 +273,7 @@ class TabManager {
           `).join('')
         : '';
 
+      // 只渲染有标签的分类（hasTabs 已在 getAllCategories 中过滤）
       return `
         <div class="category" data-id="${cat.id}">
           <div class="category-header">
