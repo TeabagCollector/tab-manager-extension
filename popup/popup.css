@@ -183,7 +183,8 @@ body {
   color: #e74c3c;
 }
 
-.btn-classify {
+.btn-classify,
+.btn-move {
   opacity: 0;
   background: none;
   border: none;
@@ -193,15 +194,18 @@ body {
   transition: opacity 0.2s;
 }
 
-.tab-item:hover .btn-classify {
+.tab-item:hover .btn-classify,
+.tab-item:hover .btn-move {
   opacity: 1;
 }
 
-.btn-classify:hover {
+.btn-classify:hover,
+.btn-move:hover {
   transform: scale(1.2);
 }
 
-.btn-classify:disabled {
+.btn-classify:disabled,
+.btn-move:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }

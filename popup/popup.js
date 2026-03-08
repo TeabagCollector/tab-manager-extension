@@ -1,6 +1,6 @@
 /**
- * Popup 主逻辑 - 智能分类版本 v0.2.3
- * 修复：空分类显示问题 + 未分类标签点击跳转
+ * Popup 主逻辑 - 智能分类版本 v0.2.4
+ * 新增：手动调整标签分类功能
  */
 
 // ========== 工具类 ==========
@@ -88,6 +88,38 @@ class CategoryTree {
     return true;
   }
 
+  moveTabToCategory(tabId, targetCategoryId) {
+    const targetCategory = this.findNode(targetCategoryId);
+    if (!targetCategory) {
+      return false;
+    }
+
+    // 查找标签当前所在位置
+    let tabData = null;
+    const findTab = (node) => {
+      const index = node.tabs.findIndex(t => t.id === tabId);
+      if (index !== -1) {
+        tabData = node.tabs[index];
+        node.tabs.splice(index, 1);
+        return true;
+      }
+      if (node.children) {
+        return node.children.some(child => findTab(child));
+      }
+      return false;
+    };
+
+    findTab(this.root);
+
+    if (!tabData) {
+      return false;
+    }
+
+    // 添加到目标分类
+    targetCategory.tabs.push(tabData);
+    return true;
+  }
+
   removeTabFromAll(tabId) {
     const removeRecursive = (node) => {
       const index = node.tabs.findIndex(t => t.id === tabId);
@@ -101,24 +133,46 @@ class CategoryTree {
     removeRecursive(this.root);
   }
 
-  // 获取所有有标签的分类（严格过滤）
   getAllCategories() {
     const categories = [];
     
     const traverse = (node, level = 0) => {
-      // 先处理子节点
       if (node.children && node.children.length > 0) {
         for (const child of node.children) {
           traverse(child, level + 1);
         }
       }
       
-      // 只添加有标签的分类
       if (node.id !== 'root' && node.tabs && node.tabs.length > 0) {
         categories.push({
           ...node,
           level
         });
+      }
+    };
+
+    traverse(this.root);
+    return categories;
+  }
+
+  // 获取所有分类（包括空的，用于移动对话框）
+  getAllCategoriesForMove() {
+    const categories = [];
+    
+    const traverse = (node, level = 0, parentPath = []) => {
+      if (node.id !== 'root') {
+        categories.push({
+          id: node.id,
+          name: node.name,
+          level,
+          path: [...parentPath, node.name].join(' > ')
+        });
+      }
+      
+      if (node.children && node.children.length > 0) {
+        for (const child of node.children) {
+          traverse(child, level + 1, node.id === 'root' ? [] : [...parentPath, node.name]);
+        }
       }
     };
 
@@ -191,7 +245,7 @@ class StorageManager {
       },
       cache: {},
       stats: {},
-      version: '0.2.3',
+      version: '0.2.4',
       createdAt: Date.now()
     };
   }
@@ -209,7 +263,7 @@ class TabManager {
 
   async init() {
     await this.loadData();
-    await this.syncCurrentTabs(); // 同步当前标签
+    await this.syncCurrentTabs();
     this.render();
     this.bindEvents();
   }
@@ -229,13 +283,11 @@ class TabManager {
     }
   }
 
-  // 同步当前打开的标签，移除已关闭的标签
   async syncCurrentTabs() {
     try {
       const currentTabs = await chrome.tabs.query({ currentWindow: true });
       const currentTabIds = new Set(currentTabs.map(t => t.id));
       
-      // 移除已关闭的标签
       const removeClosedTabs = (node) => {
         if (node.tabs && node.tabs.length > 0) {
           node.tabs = node.tabs.filter(tab => currentTabIds.has(tab.id));
@@ -247,7 +299,6 @@ class TabManager {
       
       removeClosedTabs(this.tree.root);
       
-      // 更新标签信息（url、title 可能变化）
       const updateTabInfo = (node) => {
         if (node.tabs && node.tabs.length > 0) {
           node.tabs.forEach(savedTab => {
@@ -292,7 +343,6 @@ class TabManager {
     }
 
     container.innerHTML = categories.map(cat => {
-      // 确保只显示有标签的分类
       if (!cat.tabs || cat.tabs.length === 0) {
         return '';
       }
@@ -301,6 +351,7 @@ class TabManager {
         <div class="tab-item" data-tab-id="${tab.id}" title="${this.escapeHtml(tab.url)}">
           <img class="tab-favicon" src="${tab.favIconUrl || 'data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2216%22 height=%2216%22><rect width=%2216%22 height=%2216%22 fill=%22%23ddd%22/></svg>'}" alt="" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2216%22 height=%2216%22><rect width=%2216%22 height=%2216%22 fill=%22%23ddd%22/></svg>'">
           <span class="tab-title">${this.escapeHtml(tab.title || tab.url)}</span>
+          <button class="btn-move" data-tab-id="${tab.id}" title="移动到其他分类">📁</button>
           <span class="tab-close" data-tab-id="${tab.id}">×</span>
         </div>
       `).join('');
@@ -354,6 +405,7 @@ class TabManager {
             <img class="tab-favicon" src="${tab.favIconUrl || 'data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2216%22 height=%2216%22><rect width=%2216%22 height=%2216%22 fill=%22%23ddd%22/></svg>'}" alt="" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2216%22 height=%2216%22><rect width=%2216%22 height=%2216%22 fill=%22%23ddd%22/></svg>'">
             <span class="tab-title">${this.escapeHtml(tab.title || tab.url)}</span>
             <button class="btn-classify" data-tab-id="${tab.id}" data-tab-url="${this.escapeHtml(tab.url)}" data-tab-title="${this.escapeHtml(tab.title)}">🤖</button>
+            <button class="btn-move" data-tab-id="${tab.id}" title="移动到其他分类">📁</button>
             <span class="tab-close" data-tab-id="${tab.id}">×</span>
           </div>
         `).join('');
@@ -388,7 +440,7 @@ class TabManager {
     // 分类折叠
     document.getElementById('tree-container').addEventListener('click', (e) => {
       const header = e.target.closest('.category-header');
-      if (header && !e.target.classList.contains('tab-close')) {
+      if (header && !e.target.classList.contains('tab-close') && !e.target.classList.contains('btn-move')) {
         const category = header.closest('.category');
         category.classList.toggle('collapsed');
       }
@@ -397,7 +449,7 @@ class TabManager {
     // 已分类标签点击跳转
     document.getElementById('tree-container').addEventListener('click', async (e) => {
       const tabItem = e.target.closest('.tab-item');
-      if (tabItem && !e.target.classList.contains('tab-close')) {
+      if (tabItem && !e.target.classList.contains('tab-close') && !e.target.classList.contains('btn-move')) {
         const tabId = parseInt(tabItem.dataset.tabId);
         try {
           await chrome.tabs.update(tabId, { active: true });
@@ -408,10 +460,10 @@ class TabManager {
       }
     });
 
-    // 未分类标签点击跳转（关键修复）
+    // 未分类标签点击跳转
     document.getElementById('uncategorized-tabs').addEventListener('click', async (e) => {
       const tabItem = e.target.closest('.tab-item');
-      if (tabItem && !e.target.classList.contains('tab-close') && !e.target.classList.contains('btn-classify')) {
+      if (tabItem && !e.target.classList.contains('tab-close') && !e.target.classList.contains('btn-classify') && !e.target.classList.contains('btn-move')) {
         const tabId = parseInt(tabItem.dataset.tabId);
         try {
           await chrome.tabs.update(tabId, { active: true });
@@ -419,6 +471,15 @@ class TabManager {
         } catch (error) {
           console.error('Failed to activate tab:', error);
         }
+      }
+    });
+
+    // 移动标签按钮（关键新增）
+    document.addEventListener('click', async (e) => {
+      if (e.target.classList.contains('btn-move')) {
+        e.stopPropagation();
+        const tabId = parseInt(e.target.dataset.tabId);
+        await this.showMoveDialog(tabId);
       }
     });
 
@@ -441,7 +502,7 @@ class TabManager {
         const tabId = parseInt(e.target.dataset.tabId);
         try {
           await chrome.tabs.remove(tabId);
-          await this.syncCurrentTabs(); // 同步标签状态
+          await this.syncCurrentTabs();
           this.render();
         } catch (error) {
           console.error('Failed to close tab:', error);
@@ -483,6 +544,82 @@ class TabManager {
         alert('数据已清空');
       }
     });
+
+    // 移动对话框表单
+    document.getElementById('form-move').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      await this.moveTab();
+    });
+
+    document.getElementById('btn-cancel-move').addEventListener('click', () => {
+      document.getElementById('dialog-move').close();
+    });
+  }
+
+  // 新增：显示移动对话框
+  async showMoveDialog(tabId) {
+    const dialog = document.getElementById('dialog-move');
+    const select = document.getElementById('move-target-category');
+    const tabIdInput = document.getElementById('move-tab-id');
+    
+    // 保存当前标签ID
+    tabIdInput.value = tabId;
+    
+    // 获取所有分类（包括空的）
+    const categories = this.tree.getAllCategoriesForMove();
+    
+    // 填充分类选项
+    select.innerHTML = `
+      <option value="">-- 选择目标分类 --</option>
+      ${categories.map(cat => `
+        <option value="${cat.id}">${'  '.repeat(cat.level)}${cat.name}</option>
+      `).join('')}
+    `;
+    
+    // 清空新分类输入
+    document.getElementById('move-new-category').value = '';
+    
+    dialog.showModal();
+  }
+
+  // 新增：移动标签
+  async moveTab() {
+    const tabId = parseInt(document.getElementById('move-tab-id').value);
+    const targetCategoryId = document.getElementById('move-target-category').value;
+    const newCategoryPath = document.getElementById('move-new-category').value.trim();
+    
+    try {
+      let categoryId = null;
+      
+      if (newCategoryPath) {
+        // 创建新分类路径
+        categoryId = this.tree.createCategoryPath(newCategoryPath);
+      } else if (targetCategoryId) {
+        // 使用已有分类
+        categoryId = targetCategoryId;
+      } else {
+        alert('请选择目标分类或输入新分类路径');
+        return;
+      }
+      
+      // 获取标签信息
+      const tab = await chrome.tabs.get(tabId);
+      
+      // 移动标签
+      const success = this.tree.moveTabToCategory(tabId, categoryId);
+      
+      if (success) {
+        await this.saveData();
+        this.render();
+        document.getElementById('dialog-move').close();
+        console.log(`Tab ${tabId} moved to category ${categoryId}`);
+      } else {
+        alert('移动失败，标签不存在');
+      }
+    } catch (error) {
+      console.error('Failed to move tab:', error);
+      alert('移动失败: ' + error.message);
+    }
   }
 
   async classifyTab(tabId, tabUrl, tabTitle) {

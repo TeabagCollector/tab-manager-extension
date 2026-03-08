@@ -72,6 +72,35 @@
     </form>
   </dialog>
 
+  <!-- 移动标签对话框（新增） -->
+  <dialog id="dialog-move">
+    <h2>📁 移动标签</h2>
+    <form id="form-move">
+      <input type="hidden" id="move-tab-id">
+      
+      <div class="form-group">
+        <label for="move-target-category">选择目标分类</label>
+        <select id="move-target-category">
+          <option value="">-- 选择分类 --</option>
+          <!-- 动态填充 -->
+        </select>
+      </div>
+      
+      <div class="form-group">
+        <label>或者创建新分类</label>
+        <input type="text" id="move-new-category" placeholder="例如: 人工智能 > LLM > 智谱">
+        <small style="color: #666; font-size: 11px;">
+          用 > 分隔层级，会自动创建不存在的分类
+        </small>
+      </div>
+      
+      <div class="form-actions">
+        <button type="button" class="btn-secondary" id="btn-cancel-move">取消</button>
+        <button type="submit" class="btn-primary">移动</button>
+      </div>
+    </form>
+  </dialog>
+
   <!-- 设置对话框 -->
   <dialog id="dialog-settings">
     <h2>⚙️ 设置</h2>
@@ -93,6 +122,7 @@
           💡 使用说明：<br>
           • 点击顶部 🤖 一键分类所有标签<br>
           • 或点击单个标签的 🤖 分类<br>
+          • 点击 📁 手动移动到指定分类<br>
           • 相同网页自动缓存，不重复调用API<br>
           • 约 100 次分类 ≈ 1.4 分
         </small>
