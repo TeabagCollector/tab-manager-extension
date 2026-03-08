@@ -184,6 +184,7 @@ body {
 }
 
 .btn-classify,
+.btn-reclassify,
 .btn-move {
   opacity: 0;
   background: none;
@@ -195,16 +196,19 @@ body {
 }
 
 .tab-item:hover .btn-classify,
+.tab-item:hover .btn-reclassify,
 .tab-item:hover .btn-move {
   opacity: 1;
 }
 
 .btn-classify:hover,
+.btn-reclassify:hover,
 .btn-move:hover {
   transform: scale(1.2);
 }
 
 .btn-classify:disabled,
+.btn-reclassify:disabled,
 .btn-move:disabled {
   opacity: 0.5;
   cursor: not-allowed;

@@ -1,6 +1,6 @@
 /**
- * Popup 主逻辑 - 智能分类版本 v0.2.4
- * 新增：手动调整标签分类功能
+ * Popup 主逻辑 - 智能分类版本 v0.2.5
+ * 新增：已分类标签可以重新分类
  */
 
 // ========== 工具类 ==========
@@ -94,7 +94,6 @@ class CategoryTree {
       return false;
     }
 
-    // 查找标签当前所在位置
     let tabData = null;
     const findTab = (node) => {
       const index = node.tabs.findIndex(t => t.id === tabId);
@@ -115,7 +114,6 @@ class CategoryTree {
       return false;
     }
 
-    // 添加到目标分类
     targetCategory.tabs.push(tabData);
     return true;
   }
@@ -155,7 +153,6 @@ class CategoryTree {
     return categories;
   }
 
-  // 获取所有分类（包括空的，用于移动对话框）
   getAllCategoriesForMove() {
     const categories = [];
     
@@ -178,6 +175,25 @@ class CategoryTree {
 
     traverse(this.root);
     return categories;
+  }
+
+  // 查找标签所在的分类
+  findTabCategory(tabId) {
+    let foundCategory = null;
+    
+    const findRecursive = (node) => {
+      if (node.tabs && node.tabs.some(t => t.id === tabId)) {
+        foundCategory = node;
+        return true;
+      }
+      if (node.children) {
+        return node.children.some(child => findRecursive(child));
+      }
+      return false;
+    };
+
+    findRecursive(this.root);
+    return foundCategory;
   }
 
   static fromJSON(json) {
@@ -245,7 +261,7 @@ class StorageManager {
       },
       cache: {},
       stats: {},
-      version: '0.2.4',
+      version: '0.2.5',
       createdAt: Date.now()
     };
   }
@@ -351,6 +367,7 @@ class TabManager {
         <div class="tab-item" data-tab-id="${tab.id}" title="${this.escapeHtml(tab.url)}">
           <img class="tab-favicon" src="${tab.favIconUrl || 'data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2216%22 height=%2216%22><rect width=%2216%22 height=%2216%22 fill=%22%23ddd%22/></svg>'}" alt="" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2216%22 height=%2216%22><rect width=%2216%22 height=%2216%22 fill=%22%23ddd%22/></svg>'">
           <span class="tab-title">${this.escapeHtml(tab.title || tab.url)}</span>
+          <button class="btn-reclassify" data-tab-id="${tab.id}" data-tab-url="${this.escapeHtml(tab.url)}" data-tab-title="${this.escapeHtml(tab.title)}" title="重新分类">🤖</button>
           <button class="btn-move" data-tab-id="${tab.id}" title="移动到其他分类">📁</button>
           <span class="tab-close" data-tab-id="${tab.id}">×</span>
         </div>
@@ -440,7 +457,7 @@ class TabManager {
     // 分类折叠
     document.getElementById('tree-container').addEventListener('click', (e) => {
       const header = e.target.closest('.category-header');
-      if (header && !e.target.classList.contains('tab-close') && !e.target.classList.contains('btn-move')) {
+      if (header && !e.target.classList.contains('tab-close') && !e.target.classList.contains('btn-move') && !e.target.classList.contains('btn-reclassify')) {
         const category = header.closest('.category');
         category.classList.toggle('collapsed');
       }
@@ -449,7 +466,7 @@ class TabManager {
     // 已分类标签点击跳转
     document.getElementById('tree-container').addEventListener('click', async (e) => {
       const tabItem = e.target.closest('.tab-item');
-      if (tabItem && !e.target.classList.contains('tab-close') && !e.target.classList.contains('btn-move')) {
+      if (tabItem && !e.target.classList.contains('tab-close') && !e.target.classList.contains('btn-move') && !e.target.classList.contains('btn-reclassify')) {
         const tabId = parseInt(tabItem.dataset.tabId);
         try {
           await chrome.tabs.update(tabId, { active: true });
@@ -474,7 +491,7 @@ class TabManager {
       }
     });
 
-    // 移动标签按钮（关键新增）
+    // 移动标签按钮
     document.addEventListener('click', async (e) => {
       if (e.target.classList.contains('btn-move')) {
         e.stopPropagation();
@@ -483,15 +500,18 @@ class TabManager {
       }
     });
 
-    // 智能分类按钮
+    // 分类/重新分类按钮
     document.addEventListener('click', async (e) => {
-      if (e.target.classList.contains('btn-classify')) {
+      if (e.target.classList.contains('btn-classify') || e.target.classList.contains('btn-reclassify')) {
         e.stopPropagation();
         const tabId = parseInt(e.target.dataset.tabId);
         const tabUrl = e.target.dataset.tabUrl;
         const tabTitle = e.target.dataset.tabTitle;
         
-        await this.classifyTab(tabId, tabUrl, tabTitle);
+        // 判断是重新分类还是首次分类
+        const isReclassify = e.target.classList.contains('btn-reclassify');
+        
+        await this.classifyTab(tabId, tabUrl, tabTitle, isReclassify);
       }
     });
 
@@ -556,19 +576,15 @@ class TabManager {
     });
   }
 
-  // 新增：显示移动对话框
   async showMoveDialog(tabId) {
     const dialog = document.getElementById('dialog-move');
     const select = document.getElementById('move-target-category');
     const tabIdInput = document.getElementById('move-tab-id');
     
-    // 保存当前标签ID
     tabIdInput.value = tabId;
     
-    // 获取所有分类（包括空的）
     const categories = this.tree.getAllCategoriesForMove();
     
-    // 填充分类选项
     select.innerHTML = `
       <option value="">-- 选择目标分类 --</option>
       ${categories.map(cat => `
@@ -576,13 +592,11 @@ class TabManager {
       `).join('')}
     `;
     
-    // 清空新分类输入
     document.getElementById('move-new-category').value = '';
     
     dialog.showModal();
   }
 
-  // 新增：移动标签
   async moveTab() {
     const tabId = parseInt(document.getElementById('move-tab-id').value);
     const targetCategoryId = document.getElementById('move-target-category').value;
@@ -592,20 +606,15 @@ class TabManager {
       let categoryId = null;
       
       if (newCategoryPath) {
-        // 创建新分类路径
         categoryId = this.tree.createCategoryPath(newCategoryPath);
       } else if (targetCategoryId) {
-        // 使用已有分类
         categoryId = targetCategoryId;
       } else {
         alert('请选择目标分类或输入新分类路径');
         return;
       }
       
-      // 获取标签信息
       const tab = await chrome.tabs.get(tabId);
-      
-      // 移动标签
       const success = this.tree.moveTabToCategory(tabId, categoryId);
       
       if (success) {
@@ -622,13 +631,27 @@ class TabManager {
     }
   }
 
-  async classifyTab(tabId, tabUrl, tabTitle) {
-    const btn = document.querySelector(`.btn-classify[data-tab-id="${tabId}"]`);
-    const originalText = btn.textContent;
+  async classifyTab(tabId, tabUrl, tabTitle, isReclassify = false) {
+    const btnSelector = isReclassify ? `.btn-reclassify[data-tab-id="${tabId}"]` : `.btn-classify[data-tab-id="${tabId}"]`;
+    const btn = document.querySelector(btnSelector);
+    const originalText = btn ? btn.textContent : '🤖';
     
     try {
-      btn.textContent = '⏳';
-      btn.disabled = true;
+      if (btn) {
+        btn.textContent = '⏳';
+        btn.disabled = true;
+      }
+
+      // 如果是重新分类，提示用户
+      if (isReclassify) {
+        const oldCategory = this.tree.findTabCategory(tabId);
+        const oldPath = oldCategory ? this.getCategoryPath(oldCategory.id) : '未知';
+        
+        const confirmMsg = `当前分类：${oldPath}\n\n是否重新分类此标签？`;
+        if (!confirm(confirmMsg)) {
+          return;
+        }
+      }
 
       const response = await chrome.runtime.sendMessage({
         action: 'classifyWithAI',
@@ -645,7 +668,11 @@ class TabManager {
         await this.saveData();
         this.render();
         
-        console.log(`Tab classified to: ${classification.category}`);
+        if (isReclassify) {
+          console.log(`Tab reclassified to: ${classification.category}`);
+        } else {
+          console.log(`Tab classified to: ${classification.category}`);
+        }
       } else {
         alert('分类失败: ' + response.error);
       }
@@ -653,9 +680,37 @@ class TabManager {
       console.error('Classification failed:', error);
       alert('分类失败: ' + error.message);
     } finally {
-      btn.textContent = originalText;
-      btn.disabled = false;
+      if (btn) {
+        btn.textContent = originalText;
+        btn.disabled = false;
+      }
     }
+  }
+
+  // 获取分类的完整路径
+  getCategoryPath(categoryId) {
+    const path = [];
+    let current = this.tree.findNode(categoryId);
+    
+    while (current && current.id !== 'root') {
+      path.unshift(current.name);
+      // 找到父节点
+      let parent = null;
+      const findParent = (node) => {
+        if (node.children && node.children.some(c => c.id === current.id)) {
+          parent = node;
+          return true;
+        }
+        if (node.children) {
+          return node.children.some(child => findParent(child));
+        }
+        return false;
+      };
+      findParent(this.tree.root);
+      current = parent;
+    }
+    
+    return path.join(' > ');
   }
 
   async classifyAllTabs() {
