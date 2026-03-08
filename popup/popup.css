@@ -54,6 +54,11 @@ body {
   background: #e0e0e0;
 }
 
+.btn-icon:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* 搜索栏 */
 .search-bar {
   margin-bottom: 12px;
@@ -279,6 +284,21 @@ dialog h2 {
 
 .btn-secondary:hover {
   background: #d0d0d0;
+}
+
+.btn-danger {
+  background: #e74c3c;
+  color: white;
+  padding: 8px 16px;
+  border: none;
+  border-radius: 4px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.btn-danger:hover {
+  background: #c0392b;
 }
 
 /* 空状态 */

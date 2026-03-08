@@ -1,5 +1,5 @@
 /**
- * Popup 主逻辑 - 智能分类版本
+ * Popup 主逻辑 - 智能分类版本 v0.2.1
  */
 
 // ========== 工具类 ==========
@@ -70,6 +70,9 @@ class CategoryTree {
       return false;
     }
 
+    // 先从其他分类中移除
+    this.removeTabFromAll(tab.id);
+
     const exists = category.tabs.some(t => t.id === tab.id);
     if (exists) {
       return false;
@@ -84,6 +87,19 @@ class CategoryTree {
     });
 
     return true;
+  }
+
+  removeTabFromAll(tabId) {
+    const removeRecursive = (node) => {
+      const index = node.tabs.findIndex(t => t.id === tabId);
+      if (index !== -1) {
+        node.tabs.splice(index, 1);
+      }
+      if (node.children) {
+        node.children.forEach(child => removeRecursive(child));
+      }
+    };
+    removeRecursive(this.root);
   }
 
   getAllCategories() {
@@ -171,7 +187,7 @@ class StorageManager {
       },
       cache: {},
       stats: {},
-      version: '0.2.0',
+      version: '0.2.1',
       createdAt: Date.now()
     };
   }
@@ -211,7 +227,6 @@ class TabManager {
   render() {
     this.renderTree();
     this.renderUncategorized();
-    this.renderSettings();
   }
 
   renderTree() {
@@ -223,7 +238,8 @@ class TabManager {
         <div class="empty-state">
           <div class="empty-state-icon">📂</div>
           <div>暂无分类</div>
-          <div style="font-size: 12px; margin-top: 4px;">点击标签右侧的 🤖 进行智能分类</div>
+          <div style="font-size: 12px; margin-top: 4px;">点击未分类标签右侧的 🤖 进行智能分类</div>
+          <div style="font-size: 12px; margin-top: 4px;">或点击顶部的 🤖 一键分类所有标签</div>
         </div>
       `;
       return;
@@ -282,7 +298,7 @@ class TabManager {
       countEl.textContent = uncategorizedTabs.length;
 
       if (uncategorizedTabs.length === 0) {
-        container.innerHTML = '<div style="padding: 8px; color: #999; font-size: 12px;">所有标签已分类</div>';
+        container.innerHTML = '<div style="padding: 8px; color: #999; font-size: 12px;">所有标签已分类 ✅</div>';
       } else {
         container.innerHTML = uncategorizedTabs.map(tab => `
           <div class="tab-item" data-tab-id="${tab.id}" title="${this.escapeHtml(tab.url)}">
@@ -298,10 +314,6 @@ class TabManager {
     }
   }
 
-  renderSettings() {
-    // 设置按钮点击时显示设置对话框
-  }
-
   escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text || '';
@@ -309,6 +321,11 @@ class TabManager {
   }
 
   bindEvents() {
+    // 一键分类按钮
+    document.getElementById('btn-classify-all').addEventListener('click', () => {
+      this.classifyAllTabs();
+    });
+
     // 设置按钮
     document.getElementById('btn-settings').addEventListener('click', () => {
       this.showSettingsDialog();
@@ -393,6 +410,16 @@ class TabManager {
     document.getElementById('btn-cancel-settings').addEventListener('click', () => {
       document.getElementById('dialog-settings').close();
     });
+
+    // 清空数据按钮
+    document.getElementById('btn-clear-data').addEventListener('click', async () => {
+      if (confirm('确定要清空所有数据吗？这将删除所有分类和缓存。')) {
+        await chrome.runtime.sendMessage({ action: 'clearAllData' });
+        await this.loadData();
+        this.render();
+        alert('数据已清空');
+      }
+    });
   }
 
   async classifyTab(tabId, tabUrl, tabTitle) {
@@ -403,7 +430,6 @@ class TabManager {
       btn.textContent = '⏳';
       btn.disabled = true;
 
-      // 发送消息给后台服务
       const response = await chrome.runtime.sendMessage({
         action: 'classifyWithAI',
         tab: { id: tabId, url: tabUrl, title: tabTitle }
@@ -411,18 +437,12 @@ class TabManager {
 
       if (response.success) {
         const classification = response.result;
-        
-        // 创建分类路径
         const categoryId = this.tree.createCategoryPath(classification.category);
         
-        // 添加标签到分类
         const tab = await chrome.tabs.get(tabId);
         this.tree.addTab(categoryId, tab);
         
-        // 保存
         await this.saveData();
-        
-        // 重新渲染
         this.render();
         
         console.log(`Tab classified to: ${classification.category}`);
@@ -432,6 +452,86 @@ class TabManager {
     } catch (error) {
       console.error('Classification failed:', error);
       alert('分类失败: ' + error.message);
+    } finally {
+      btn.textContent = originalText;
+      btn.disabled = false;
+    }
+  }
+
+  async classifyAllTabs() {
+    const btn = document.getElementById('btn-classify-all');
+    const originalText = btn.textContent;
+    
+    try {
+      // 获取所有未分类标签
+      const tabs = await chrome.tabs.query({ currentWindow: true });
+      const categorizedTabIds = new Set();
+      
+      const collectTabs = (node) => {
+        if (node.tabs) {
+          node.tabs.forEach(tab => categorizedTabIds.add(tab.id));
+        }
+        if (node.children) {
+          node.children.forEach(child => collectTabs(child));
+        }
+      };
+      collectTabs(this.tree.root);
+
+      const uncategorizedTabs = tabs.filter(tab => {
+        if (tab.url.startsWith('chrome://') || tab.url.startsWith('chrome-extension://')) {
+          return false;
+        }
+        return !categorizedTabIds.has(tab.id);
+      });
+
+      if (uncategorizedTabs.length === 0) {
+        alert('没有需要分类的标签');
+        return;
+      }
+
+      const confirmMsg = `即将分类 ${uncategorizedTabs.length} 个标签\n预计消耗API：约 ${(uncategorizedTabs.length * 0.014).toFixed(2)} 分\n\n确定继续吗？`;
+      
+      if (!confirm(confirmMsg)) {
+        return;
+      }
+
+      btn.textContent = '⏳ 分类中...';
+      btn.disabled = true;
+
+      // 批量分类
+      const results = await chrome.runtime.sendMessage({
+        action: 'classifyBatch',
+        tabs: uncategorizedTabs
+      });
+
+      if (results.success) {
+        let successCount = 0;
+        let failCount = 0;
+
+        for (const result of results.results) {
+          if (result.success) {
+            const categoryId = this.tree.createCategoryPath(result.classification.category);
+            const tab = uncategorizedTabs.find(t => t.id === result.tabId);
+            if (tab) {
+              this.tree.addTab(categoryId, tab);
+              successCount++;
+            }
+          } else {
+            console.error(`Failed to classify tab ${result.tabId}:`, result.error);
+            failCount++;
+          }
+        }
+
+        await this.saveData();
+        this.render();
+
+        alert(`批量分类完成！\n成功：${successCount} 个\n失败：${failCount} 个`);
+      } else {
+        alert('批量分类失败: ' + results.error);
+      }
+    } catch (error) {
+      console.error('Batch classification failed:', error);
+      alert('批量分类失败: ' + error.message);
     } finally {
       btn.textContent = originalText;
       btn.disabled = false;
