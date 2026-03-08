@@ -2,13 +2,9 @@
  * Popup 主逻辑
  */
 
-import { CategoryTree } from '../lib/tree.js';
-import { StorageManager } from '../lib/storage.js';
-import { RulesEngine } from '../lib/rules.js';
-
 class TabManager {
   constructor() {
-    this.tree = new CategoryTree();
+    this.tree = null;
     this.storage = new StorageManager();
     this.rules = new RulesEngine();
     
@@ -29,12 +25,22 @@ class TabManager {
    */
   async loadData() {
     try {
-      const treeData = await this.storage.getTree();
-      if (treeData && treeData.id === 'root') {
-        this.tree = CategoryTree.fromJSON(JSON.stringify(treeData));
+      const data = await this.storage.getAll();
+      
+      // 初始化树
+      if (data.categories && data.categories.id === 'root') {
+        this.tree = CategoryTree.fromJSON(JSON.stringify(data.categories));
+      } else {
+        this.tree = new CategoryTree();
+      }
+
+      // 加载规则
+      if (data.customRules) {
+        data.customRules.forEach(rule => this.rules.addRule(rule));
       }
     } catch (error) {
       console.error('Failed to load data:', error);
+      this.tree = new CategoryTree();
     }
 
     // 加载当前标签
@@ -45,17 +51,49 @@ class TabManager {
    * 加载当前打开的标签
    */
   async loadCurrentTabs() {
-    const tabs = await chrome.tabs.query({ currentWindow: true });
-    
-    for (const tab of tabs) {
-      // 尝试自动分类
-      if (!tab.url.startsWith('chrome://')) {
-        const match = this.rules.match(tab.url);
-        if (match) {
-          this.tree.addTab(match.categoryId, tab);
+    try {
+      const tabs = await chrome.tabs.query({ currentWindow: true });
+      const data = await this.storage.getAll();
+      
+      // 清空现有标签
+      this.clearAllTabs();
+      
+      for (const tab of tabs) {
+        // 跳过chrome内部页面
+        if (tab.url.startsWith('chrome://') || tab.url.startsWith('chrome-extension://')) {
+          continue;
+        }
+
+        // 从存储中查找分类映射
+        const mapping = data.tabs ? data.tabs[tab.id] : null;
+        
+        if (mapping && mapping.categoryId) {
+          // 已有映射，直接添加
+          this.tree.addTab(mapping.categoryId, tab);
+        } else {
+          // 尝试自动分类
+          const match = this.rules.match(tab.url);
+          if (match) {
+            this.tree.addTab(match.categoryId, tab);
+          }
         }
       }
+    } catch (error) {
+      console.error('Failed to load current tabs:', error);
     }
+  }
+
+  /**
+   * 清空所有分类中的标签
+   */
+  clearAllTabs() {
+    const clearRecursive = (node) => {
+      node.tabs = [];
+      if (node.children) {
+        node.children.forEach(child => clearRecursive(child));
+      }
+    };
+    clearRecursive(this.tree.root);
   }
 
   /**
@@ -84,48 +122,85 @@ class TabManager {
       return;
     }
 
-    container.innerHTML = categories.map(cat => `
-      <div class="category" data-id="${cat.id}">
-        <div class="category-header">
-          <span class="category-toggle">▼</span>
-          <span class="category-name">${cat.name}</span>
-          <span class="tab-count">${cat.tabs.length}</span>
-        </div>
-        <div class="tabs-list">
-          ${cat.tabs.map(tab => `
-            <div class="tab-item" data-tab-id="${tab.id}">
-              <img class="tab-favicon" src="${tab.favIconUrl || 'icons/default-favicon.png'}" alt="">
-              <span class="tab-title">${tab.title}</span>
+    container.innerHTML = categories.map(cat => {
+      const tabItems = cat.tabs && cat.tabs.length > 0 
+        ? cat.tabs.map(tab => `
+            <div class="tab-item" data-tab-id="${tab.id}" title="${tab.url}">
+              <img class="tab-favicon" src="${tab.favIconUrl || 'data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2216%22 height=%2216%22><rect width=%2216%22 height=%2216%22 fill=%22%23ddd%22/></svg>'}" alt="" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2216%22 height=%2216%22><rect width=%2216%22 height=%2216%22 fill=%22%23ddd%22/></svg>'">
+              <span class="tab-title">${this.escapeHtml(tab.title || tab.url)}</span>
               <span class="tab-close" data-tab-id="${tab.id}">×</span>
             </div>
-          `).join('')}
+          `).join('')
+        : '';
+
+      return `
+        <div class="category" data-id="${cat.id}">
+          <div class="category-header">
+            <span class="category-toggle">▼</span>
+            <span class="category-name">${this.escapeHtml(cat.name)}</span>
+            <span class="tab-count">${cat.tabs ? cat.tabs.length : 0}</span>
+          </div>
+          <div class="tabs-list">
+            ${tabItems}
+          </div>
         </div>
-      </div>
-    `).join('');
+      `;
+    }).join('');
   }
 
   /**
    * 渲染未分类标签
    */
   async renderUncategorized() {
-    const tabs = await chrome.tabs.query({ currentWindow: true });
-    const container = document.getElementById('uncategorized-tabs');
-    const countEl = document.getElementById('uncategorized-count');
+    try {
+      const tabs = await chrome.tabs.query({ currentWindow: true });
+      const container = document.getElementById('uncategorized-tabs');
+      const countEl = document.getElementById('uncategorized-count');
 
-    const uncategorizedTabs = tabs.filter(tab => {
-      if (tab.url.startsWith('chrome://')) return false;
-      return !this.rules.match(tab.url);
-    });
+      // 找出未分类的标签
+      const categorizedTabIds = new Set();
+      const collectTabs = (node) => {
+        if (node.tabs) {
+          node.tabs.forEach(tab => categorizedTabIds.add(tab.id));
+        }
+        if (node.children) {
+          node.children.forEach(child => collectTabs(child));
+        }
+      };
+      collectTabs(this.tree.root);
 
-    countEl.textContent = uncategorizedTabs.length;
+      const uncategorizedTabs = tabs.filter(tab => {
+        if (tab.url.startsWith('chrome://') || tab.url.startsWith('chrome-extension://')) {
+          return false;
+        }
+        return !categorizedTabIds.has(tab.id);
+      });
 
-    container.innerHTML = uncategorizedTabs.map(tab => `
-      <div class="tab-item" data-tab-id="${tab.id}">
-        <img class="tab-favicon" src="${tab.favIconUrl || 'icons/default-favicon.png'}" alt="">
-        <span class="tab-title">${tab.title}</span>
-        <span class="tab-close" data-tab-id="${tab.id}">×</span>
-      </div>
-    `).join('');
+      countEl.textContent = uncategorizedTabs.length;
+
+      if (uncategorizedTabs.length === 0) {
+        container.innerHTML = '<div style="padding: 8px; color: #999; font-size: 12px;">所有标签已分类</div>';
+      } else {
+        container.innerHTML = uncategorizedTabs.map(tab => `
+          <div class="tab-item" data-tab-id="${tab.id}" title="${tab.url}">
+            <img class="tab-favicon" src="${tab.favIconUrl || 'data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2216%22 height=%2216%22><rect width=%2216%22 height=%2216%22 fill=%22%23ddd%22/></svg>'}" alt="" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2216%22 height=%2216%22><rect width=%2216%22 height=%2216%22 fill=%22%23ddd%22/></svg>'">
+            <span class="tab-title">${this.escapeHtml(tab.title || tab.url)}</span>
+            <span class="tab-close" data-tab-id="${tab.id}">×</span>
+          </div>
+        `).join('');
+      }
+    } catch (error) {
+      console.error('Failed to render uncategorized tabs:', error);
+    }
+  }
+
+  /**
+   * 转义HTML
+   */
+  escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
   }
 
   /**
@@ -140,7 +215,7 @@ class TabManager {
     // 分类折叠
     document.getElementById('tree-container').addEventListener('click', (e) => {
       const header = e.target.closest('.category-header');
-      if (header) {
+      if (header && !e.target.classList.contains('tab-close')) {
         const category = header.closest('.category');
         category.classList.toggle('collapsed');
       }
@@ -151,19 +226,28 @@ class TabManager {
       const tabItem = e.target.closest('.tab-item');
       if (tabItem && !e.target.classList.contains('tab-close')) {
         const tabId = parseInt(tabItem.dataset.tabId);
-        await chrome.tabs.update(tabId, { active: true });
-        window.close();
+        try {
+          await chrome.tabs.update(tabId, { active: true });
+          window.close();
+        } catch (error) {
+          console.error('Failed to activate tab:', error);
+        }
       }
     });
 
     // 标签关闭
-    document.querySelectorAll('.tab-close').forEach(btn => {
-      btn.addEventListener('click', async (e) => {
+    document.addEventListener('click', async (e) => {
+      if (e.target.classList.contains('tab-close')) {
         e.stopPropagation();
         const tabId = parseInt(e.target.dataset.tabId);
-        await chrome.tabs.remove(tabId);
-        await this.render();
-      });
+        try {
+          await chrome.tabs.remove(tabId);
+          await this.loadCurrentTabs();
+          this.render();
+        } catch (error) {
+          console.error('Failed to close tab:', error);
+        }
+      }
     });
 
     // 搜索
@@ -198,6 +282,10 @@ class TabManager {
       `).join('')}
     `;
 
+    // 清空表单
+    document.getElementById('category-name').value = '';
+    document.getElementById('category-domains').value = '';
+
     dialog.showModal();
   }
 
@@ -205,25 +293,52 @@ class TabManager {
    * 添加分类
    */
   async addCategory() {
-    const name = document.getElementById('category-name').value;
+    const name = document.getElementById('category-name').value.trim();
     const parentId = document.getElementById('category-parent').value;
-    const domainsStr = document.getElementById('category-domains').value;
+    const domainsStr = document.getElementById('category-domains').value.trim();
+
+    if (!name) {
+      alert('请输入分类名称');
+      return;
+    }
 
     const domains = domainsStr
       .split(',')
       .map(d => d.trim())
-      .filter(d => d);
+      .filter(d => d.length > 0);
 
-    this.tree.addCategory(parentId, {
-      name,
-      domains
-    });
+    try {
+      // 添加到树
+      const newNode = this.tree.addCategory(parentId, {
+        name,
+        domains
+      });
 
-    await this.saveData();
-    this.render();
+      // 保存到存储
+      await this.saveData();
 
-    document.getElementById('dialog-add-category').close();
-    document.getElementById('form-add-category').reset();
+      // 如果有域名，添加规则
+      if (domains.length > 0) {
+        const pattern = new RegExp(domains.join('|').replace(/\./g, '\\.'));
+        this.rules.addRule({
+          name: name,
+          pattern: pattern,
+          categoryId: newNode.id,
+          priority: 1
+        });
+      }
+
+      // 重新渲染
+      this.render();
+
+      // 关闭对话框
+      document.getElementById('dialog-add-category').close();
+      
+      console.log(`Category "${name}" added under parent ${parentId}`);
+    } catch (error) {
+      console.error('Failed to add category:', error);
+      alert('添加分类失败: ' + error.message);
+    }
   }
 
   /**
@@ -247,9 +362,19 @@ class TabManager {
    * 保存数据
    */
   async saveData() {
-    await this.storage.saveTree(this.tree.root);
+    try {
+      const data = await this.storage.getAll();
+      data.categories = this.tree.root;
+      data.updatedAt = Date.now();
+      await this.storage.saveAll(data);
+    } catch (error) {
+      console.error('Failed to save data:', error);
+      throw error;
+    }
   }
 }
 
 // 启动
-new TabManager();
+document.addEventListener('DOMContentLoaded', () => {
+  new TabManager();
+});
