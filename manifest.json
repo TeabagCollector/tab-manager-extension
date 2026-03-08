@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "Smart Tab Manager",
+  "version": "0.1.0",
+  "description": "层级化管理浏览器标签，智能归类与组织",
+  
+  "permissions": [
+    "tabs",
+    "storage"
+  ],
+  
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    },
+    "default_title": "Tab Manager"
+  },
+  
+  "background": {
+    "service_worker": "background/service-worker.js"
+  },
+  
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

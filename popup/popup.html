@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tab Manager</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div id="app">
+    <!-- 头部 -->
+    <header class="header">
+      <h1>📁 Tab Manager</h1>
+      <div class="header-actions">
+        <button id="btn-add-category" class="btn-icon" title="新建分类">
+          ➕
+        </button>
+        <button id="btn-settings" class="btn-icon" title="设置">
+          ⚙️
+        </button>
+      </div>
+    </header>
+
+    <!-- 搜索栏 -->
+    <div class="search-bar">
+      <input type="text" id="search-input" placeholder="搜索标签或分类...">
+    </div>
+
+    <!-- 分类树 -->
+    <div class="tree-container" id="tree-container">
+      <!-- 动态渲染 -->
+    </div>
+
+    <!-- 未分类标签 -->
+    <div class="uncategorized" id="uncategorized">
+      <div class="category-header">
+        <span class="category-name">📌 未分类</span>
+        <span class="tab-count" id="uncategorized-count">0</span>
+      </div>
+      <div class="tabs-list" id="uncategorized-tabs">
+        <!-- 动态渲染 -->
+      </div>
+    </div>
+  </div>
+
+  <!-- 新建分类对话框 -->
+  <dialog id="dialog-add-category">
+    <h2>新建分类</h2>
+    <form id="form-add-category">
+      <div class="form-group">
+        <label for="category-name">分类名称</label>
+        <input type="text" id="category-name" required>
+      </div>
+      <div class="form-group">
+        <label for="category-parent">父分类</label>
+        <select id="category-parent">
+          <option value="root">根目录</option>
+          <!-- 动态填充 -->
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="category-domains">域名规则（逗号分隔）</label>
+        <input type="text" id="category-domains" placeholder="例如: openai.com, chatgpt.com">
+      </div>
+      <div class="form-actions">
+        <button type="button" class="btn-secondary" id="btn-cancel-category">取消</button>
+        <button type="submit" class="btn-primary">创建</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script type="module" src="popup.js"></script>
+</body>
+</html>
