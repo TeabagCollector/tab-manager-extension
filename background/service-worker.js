@@ -130,6 +130,11 @@ class BackgroundService {
   async classifyTabWithAI(tab) {
     const data = await this.storage.getAll();
     
+    // 确保缓存对象存在
+    if (!data.cache) {
+      data.cache = {};
+    }
+    
     // 检查缓存
     const cacheKey = this.getCacheKey(tab);
     if (data.cache[cacheKey]) {
@@ -138,7 +143,7 @@ class BackgroundService {
     }
 
     // 检查API配置
-    if (!data.settings.apiKey) {
+    if (!data.settings || !data.settings.apiKey) {
       throw new Error('请先在设置中配置 DeepSeek API Key');
     }
 
@@ -156,7 +161,7 @@ class BackgroundService {
     const results = [];
     const data = await this.storage.getAll();
     
-    if (!data.settings.apiKey) {
+    if (!data.settings || !data.settings.apiKey) {
       throw new Error('请先在设置中配置 DeepSeek API Key');
     }
     
