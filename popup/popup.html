@@ -69,6 +69,35 @@
     </form>
   </dialog>
 
+  <!-- 设置对话框 -->
+  <dialog id="dialog-settings">
+    <h2>⚙️ 设置</h2>
+    <form id="form-settings">
+      <div class="form-group">
+        <label for="setting-api-key">DeepSeek API Key</label>
+        <input type="password" id="setting-api-key" placeholder="sk-...">
+      </div>
+      <div class="form-group">
+        <label for="setting-api-endpoint">API Endpoint</label>
+        <input type="text" id="setting-api-endpoint" value="https://api.deepseek.com/v1/chat/completions">
+      </div>
+      <div class="form-group">
+        <label for="setting-model">模型</label>
+        <input type="text" id="setting-model" value="deepseek-chat">
+      </div>
+      <div class="form-group">
+        <small style="color: #666;">
+          💡 提示：点击未分类标签右侧的 🤖 按钮进行智能分类<br>
+          系统会缓存分类结果，避免重复调用API
+        </small>
+      </div>
+      <div class="form-actions">
+        <button type="button" class="btn-secondary" id="btn-cancel-settings">取消</button>
+        <button type="submit" class="btn-primary">保存</button>
+      </div>
+    </form>
+  </dialog>
+
   <script src="popup.js"></script>
 </body>
 </html>

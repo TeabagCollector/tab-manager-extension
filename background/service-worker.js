@@ -1,37 +1,7 @@
 /**
  * Service Worker - 后台服务
- * 处理标签事件和自动分类
+ * 轻量化版本，不预置分类
  */
-
-// 直接在全局定义 RulesEngine 和 StorageManager
-class RulesEngine {
-  constructor(rules = []) {
-    this.rules = rules;
-  }
-
-  match(url) {
-    for (const rule of this.rules) {
-      if (!rule.enabled) continue;
-      if (rule.pattern.test(url)) {
-        return {
-          ruleId: rule.id,
-          categoryId: rule.categoryId,
-          confidence: 1 / rule.priority
-        };
-      }
-    }
-    return null;
-  }
-
-  addRule(rule) {
-    this.rules.push({
-      id: `rule-custom-${Date.now()}`,
-      priority: 5,
-      enabled: true,
-      ...rule
-    });
-  }
-}
 
 class StorageManager {
   constructor() {
@@ -60,35 +30,6 @@ class StorageManager {
     });
   }
 
-  async saveTabMapping(tabId, categoryId) {
-    const data = await this.getAll();
-    if (!data.tabs) data.tabs = {};
-    data.tabs[tabId] = {
-      categoryId,
-      lastUpdate: Date.now()
-    };
-    await this.saveAll(data);
-  }
-
-  async removeTabMapping(tabId) {
-    const data = await this.getAll();
-    if (data.tabs) {
-      delete data.tabs[tabId];
-      await this.saveAll(data);
-    }
-  }
-
-  async updateStats(domain) {
-    const data = await this.getAll();
-    if (!data.stats) data.stats = {};
-    const current = data.stats[domain] || { visitCount: 0 };
-    data.stats[domain] = {
-      visitCount: current.visitCount + 1,
-      lastVisit: Date.now()
-    };
-    await this.saveAll(data);
-  }
-
   getDefaultData() {
     return {
       categories: {
@@ -99,11 +40,15 @@ class StorageManager {
       },
       tabs: {},
       settings: {
-        autoCategorize: true,
-        showFavicons: true
+        autoCategorize: false, // 默认关闭自动分类
+        showFavicons: true,
+        apiKey: '', // DeepSeek API Key
+        apiEndpoint: 'https://api.deepseek.com/v1/chat/completions',
+        model: 'deepseek-chat'
       },
+      cache: {}, // 分类缓存
       stats: {},
-      version: '0.1.0',
+      version: '0.2.0',
       createdAt: Date.now()
     };
   }
@@ -112,161 +57,140 @@ class StorageManager {
 class BackgroundService {
   constructor() {
     this.storage = new StorageManager();
-    this.rules = new RulesEngine();
-    
     this.init();
   }
 
   async init() {
-    // 监听标签创建
-    chrome.tabs.onCreated.addListener((tab) => {
-      this.handleTabCreated(tab);
-    });
-
-    // 监听标签关闭
-    chrome.tabs.onRemoved.addListener((tabId) => {
-      this.handleTabRemoved(tabId);
-    });
-
-    // 监听标签更新
-    chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-      if (changeInfo.url) {
-        this.handleTabUrlChanged(tab);
+    // 监听扩展安装
+    chrome.runtime.onInstalled.addListener(async () => {
+      console.log('Tab Manager installed');
+      const data = await this.storage.getAll();
+      if (!data.categories || data.categories.id !== 'root') {
+        await this.storage.saveAll(this.storage.getDefaultData());
+        console.log('Default data initialized');
       }
     });
 
-    // 安装时的初始化
-    chrome.runtime.onInstalled.addListener(async () => {
-      console.log('Tab Manager installed');
-      await this.initDefaultCategories();
+    // 监听消息
+    chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+      this.handleMessage(request, sender, sendResponse);
+      return true; // 保持消息通道开启
+    });
+  }
+
+  async handleMessage(request, sender, sendResponse) {
+    try {
+      switch (request.action) {
+        case 'classifyWithAI':
+          const result = await this.classifyTabWithAI(request.tab);
+          sendResponse({ success: true, result });
+          break;
+          
+        case 'updateSettings':
+          const data = await this.storage.getAll();
+          data.settings = { ...data.settings, ...request.settings };
+          await this.storage.saveAll(data);
+          sendResponse({ success: true });
+          break;
+          
+        case 'getSettings':
+          const settings = await this.storage.getAll();
+          sendResponse({ success: true, settings: settings.settings });
+          break;
+          
+        default:
+          sendResponse({ success: false, error: 'Unknown action' });
+      }
+    } catch (error) {
+      console.error('Error handling message:', error);
+      sendResponse({ success: false, error: error.message });
+    }
+  }
+
+  async classifyTabWithAI(tab) {
+    const data = await this.storage.getAll();
+    
+    // 检查缓存
+    const cacheKey = this.getCacheKey(tab);
+    if (data.cache[cacheKey]) {
+      console.log('Using cached classification');
+      return data.cache[cacheKey];
+    }
+
+    // 检查API配置
+    if (!data.settings.apiKey) {
+      throw new Error('请先配置 DeepSeek API Key');
+    }
+
+    // 调用DeepSeek API
+    const classification = await this.callDeepSeekAPI(tab, data.settings);
+    
+    // 缓存结果
+    data.cache[cacheKey] = classification;
+    await this.storage.saveAll(data);
+
+    return classification;
+  }
+
+  getCacheKey(tab) {
+    // 使用 URL + title 的组合作为缓存key
+    const content = `${tab.url}|${tab.title}`;
+    return btoa(content).substring(0, 32);
+  }
+
+  async callDeepSeekAPI(tab, settings) {
+    const prompt = this.buildPrompt(tab);
+    
+    const response = await fetch(settings.apiEndpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${settings.apiKey}`
+      },
+      body: JSON.stringify({
+        model: settings.model,
+        messages: [
+          {
+            role: 'system',
+            content: '你是一个网页分类助手。用户会给你网页的标题和URL，你需要返回一个JSON格式的分类建议。格式：{"category": "分类路径", "confidence": 0.9}。分类路径用 > 分隔，例如："人工智能 > LLM提供商 > 智谱"。只返回JSON，不要其他解释。'
+          },
+          {
+            role: 'user',
+            content: prompt
+          }
+        ],
+        temperature: 0.3,
+        max_tokens: 100
+      })
     });
 
-    // 加载已有规则
-    await this.loadRules();
-  }
-
-  async loadRules() {
-    const data = await this.storage.getAll();
-    // 从分类中提取规则
-    this.buildRulesFromCategories(data.categories);
-  }
-
-  buildRulesFromCategories(node) {
-    if (node.domains && node.domains.length > 0) {
-      const pattern = new RegExp(node.domains.join('|').replace(/\./g, '\\.'));
-      this.rules.addRule({
-        name: node.name,
-        pattern: pattern,
-        categoryId: node.id,
-        priority: 1
-      });
+    if (!response.ok) {
+      throw new Error(`API请求失败: ${response.status}`);
     }
+
+    const result = await response.json();
+    const content = result.choices[0].message.content;
     
-    if (node.children) {
-      node.children.forEach(child => this.buildRulesFromCategories(child));
-    }
-  }
-
-  async handleTabCreated(tab) {
-    if (!tab.url || tab.url.startsWith('chrome://')) {
-      return;
-    }
-
-    // 尝试自动分类
-    const match = this.rules.match(tab.url);
-    if (match) {
-      await this.storage.saveTabMapping(tab.id, match.categoryId);
-      console.log(`Tab ${tab.id} auto-categorized to ${match.categoryId}`);
-    }
-
-    // 更新统计数据
     try {
-      const domain = new URL(tab.url).hostname;
-      await this.storage.updateStats(domain);
+      const classification = JSON.parse(content);
+      return {
+        category: classification.category,
+        confidence: classification.confidence || 0.5,
+        timestamp: Date.now()
+      };
     } catch (e) {
-      // URL解析失败，忽略
+      console.error('Failed to parse AI response:', content);
+      throw new Error('AI返回格式错误');
     }
   }
 
-  async handleTabRemoved(tabId) {
-    await this.storage.removeTabMapping(tabId);
-    console.log(`Tab ${tabId} removed from mapping`);
-  }
+  buildPrompt(tab) {
+    return `请对以下网页进行分类：
 
-  async handleTabUrlChanged(tab) {
-    if (!tab.url || tab.url.startsWith('chrome://')) {
-      return;
-    }
+标题：${tab.title}
+URL：${tab.url}
 
-    // 重新分类
-    const match = this.rules.match(tab.url);
-    if (match) {
-      await this.storage.saveTabMapping(tab.id, match.categoryId);
-    }
-  }
-
-  async initDefaultCategories() {
-    const data = await this.storage.getAll();
-    
-    // 如果是新安装，创建默认分类结构
-    if (!data.categories.children || data.categories.children.length === 0) {
-      const defaultCategories = [
-        {
-          id: 'ai',
-          name: '人工智能',
-          domains: [],
-          tabs: [],
-          children: [
-            {
-              id: 'ai-llm-provider',
-              name: 'LLM提供商',
-              domains: [],
-              tabs: [],
-              children: [
-                { id: 'ai-llm-zhipu', name: '智谱', domains: ['bigmodel.cn', 'chatglm.cn', 'zhipuai.cn'], tabs: [], children: [] },
-                { id: 'ai-llm-openai', name: 'OpenAI', domains: ['openai.com', 'chatgpt.com', 'chat.openai.com'], tabs: [], children: [] },
-                { id: 'ai-llm-anthropic', name: 'Anthropic', domains: ['anthropic.com', 'claude.ai'], tabs: [], children: [] },
-                { id: 'ai-llm-google', name: 'Google AI', domains: ['gemini.google.com', 'ai.google', 'deepmind.com'], tabs: [], children: [] }
-              ]
-            },
-            {
-              id: 'ai-ml-platform',
-              name: 'ML平台',
-              domains: [],
-              tabs: [],
-              children: [
-                { id: 'ai-kaggle', name: 'Kaggle', domains: ['kaggle.com'], tabs: [], children: [] },
-                { id: 'ai-huggingface', name: 'Hugging Face', domains: ['huggingface.co', 'hf.co'], tabs: [], children: [] }
-              ]
-            },
-            {
-              id: 'ai-research',
-              name: '研究资源',
-              domains: ['arxiv.org', 'paperswithcode.com'],
-              tabs: [],
-              children: []
-            }
-          ]
-        },
-        {
-          id: 'dev',
-          name: '开发工具',
-          domains: [],
-          tabs: [],
-          children: [
-            { id: 'dev-coding', name: '编程平台', domains: ['github.com', 'gitlab.com', 'bitbucket.org'], tabs: [], children: [] },
-            { id: 'dev-docs', name: '技术文档', domains: ['stackoverflow.com', 'stackexchange.com', 'dev.to'], tabs: [], children: [] }
-          ]
-        }
-      ];
-
-      data.categories.children = defaultCategories;
-      await this.storage.saveAll(data);
-      console.log('Default categories created');
-      
-      // 重新加载规则
-      this.buildRulesFromCategories(data.categories);
-    }
+请返回JSON格式的分类建议。`;
   }
 }
 

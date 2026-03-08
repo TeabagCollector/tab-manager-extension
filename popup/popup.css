@@ -166,6 +166,8 @@ body {
   color: #999;
   cursor: pointer;
   padding: 0 4px;
+  border: none;
+  background: none;
 }
 
 .tab-item:hover .tab-close {
@@ -174,6 +176,29 @@ body {
 
 .tab-close:hover {
   color: #e74c3c;
+}
+
+.btn-classify {
+  opacity: 0;
+  background: none;
+  border: none;
+  font-size: 14px;
+  cursor: pointer;
+  padding: 0 4px;
+  transition: opacity 0.2s;
+}
+
+.tab-item:hover .btn-classify {
+  opacity: 1;
+}
+
+.btn-classify:hover {
+  transform: scale(1.2);
+}
+
+.btn-classify:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* 未分类 */
@@ -189,7 +214,7 @@ dialog {
   border-radius: 8px;
   padding: 20px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
-  width: 320px;
+  width: 340px;
 }
 
 dialog::backdrop {

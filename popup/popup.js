@@ -1,6 +1,5 @@
 /**
- * Popup 主逻辑
- * 所有依赖类内联在此文件中
+ * Popup 主逻辑 - 智能分类版本
  */
 
 // ========== 工具类 ==========
@@ -44,6 +43,25 @@ class CategoryTree {
     this.nodeMap.set(newNode.id, newNode);
 
     return newNode;
+  }
+
+  // 根据路径创建分类（AI返回的路径）
+  createCategoryPath(pathStr) {
+    const parts = pathStr.split('>').map(p => p.trim()).filter(p => p);
+    let currentId = 'root';
+    
+    for (const part of parts) {
+      const parent = this.findNode(currentId);
+      let found = parent.children.find(c => c.name === part);
+      
+      if (!found) {
+        found = this.addCategory(currentId, { name: part });
+      }
+      
+      currentId = found.id;
+    }
+    
+    return currentId;
   }
 
   addTab(categoryId, tab) {
@@ -145,42 +163,17 @@ class StorageManager {
       },
       tabs: {},
       settings: {
-        autoCategorize: true,
-        showFavicons: true
+        autoCategorize: false,
+        showFavicons: true,
+        apiKey: '',
+        apiEndpoint: 'https://api.deepseek.com/v1/chat/completions',
+        model: 'deepseek-chat'
       },
+      cache: {},
       stats: {},
-      version: '0.1.0',
+      version: '0.2.0',
       createdAt: Date.now()
     };
-  }
-}
-
-class RulesEngine {
-  constructor(rules = []) {
-    this.rules = rules;
-  }
-
-  match(url) {
-    for (const rule of this.rules) {
-      if (!rule.enabled) continue;
-      if (rule.pattern.test(url)) {
-        return {
-          ruleId: rule.id,
-          categoryId: rule.categoryId,
-          confidence: 1 / rule.priority
-        };
-      }
-    }
-    return null;
-  }
-
-  addRule(rule) {
-    this.rules.push({
-      id: rule.id || `rule-${Date.now()}`,
-      priority: rule.priority || 5,
-      enabled: rule.enabled !== false,
-      ...rule
-    });
   }
 }
 
@@ -190,7 +183,6 @@ class TabManager {
   constructor() {
     this.tree = null;
     this.storage = new StorageManager();
-    this.rules = new RulesEngine();
     
     this.init();
   }
@@ -205,92 +197,21 @@ class TabManager {
     try {
       const data = await this.storage.getAll();
       
-      // 初始化树
       if (data.categories && data.categories.id === 'root') {
         this.tree = CategoryTree.fromJSON(data.categories);
       } else {
         this.tree = new CategoryTree();
       }
-
-      // 加载规则
-      if (data.customRules) {
-        data.customRules.forEach(rule => this.rules.addRule(rule));
-      }
-      
-      // 从分类中提取规则
-      this.buildRulesFromCategories(this.tree.root);
-      
     } catch (error) {
       console.error('Failed to load data:', error);
       this.tree = new CategoryTree();
     }
-
-    // 加载当前标签
-    await this.loadCurrentTabs();
-  }
-
-  buildRulesFromCategories(node) {
-    if (node.domains && node.domains.length > 0) {
-      const pattern = new RegExp(node.domains.join('|').replace(/\./g, '\\.'));
-      this.rules.addRule({
-        name: node.name,
-        pattern: pattern,
-        categoryId: node.id,
-        priority: 1
-      });
-    }
-    
-    if (node.children) {
-      node.children.forEach(child => this.buildRulesFromCategories(child));
-    }
-  }
-
-  async loadCurrentTabs() {
-    try {
-      const tabs = await chrome.tabs.query({ currentWindow: true });
-      const data = await this.storage.getAll();
-      
-      // 清空现有标签
-      this.clearAllTabs();
-      
-      for (const tab of tabs) {
-        // 跳过chrome内部页面
-        if (tab.url.startsWith('chrome://') || tab.url.startsWith('chrome-extension://')) {
-          continue;
-        }
-
-        // 从存储中查找分类映射
-        const mapping = data.tabs ? data.tabs[tab.id] : null;
-        
-        if (mapping && mapping.categoryId) {
-          // 已有映射，直接添加
-          this.tree.addTab(mapping.categoryId, tab);
-        } else {
-          // 尝试自动分类
-          const match = this.rules.match(tab.url);
-          if (match) {
-            this.tree.addTab(match.categoryId, tab);
-          }
-        }
-      }
-    } catch (error) {
-      console.error('Failed to load current tabs:', error);
-    }
-  }
-
-  clearAllTabs() {
-    const clearRecursive = (node) => {
-      node.tabs = [];
-      if (node.children) {
-        node.children.forEach(child => clearRecursive(child));
-      }
-    };
-    clearRecursive(this.tree.root);
   }
 
   render() {
     this.renderTree();
     this.renderUncategorized();
+    this.renderSettings();
   }
 
   renderTree() {
@@ -302,7 +223,7 @@ class TabManager {
         <div class="empty-state">
           <div class="empty-state-icon">📂</div>
           <div>暂无分类</div>
-          <div style="font-size: 12px; margin-top: 4px;">点击右上角 ➕ 创建</div>
+          <div style="font-size: 12px; margin-top: 4px;">点击标签右侧的 🤖 进行智能分类</div>
         </div>
       `;
       return;
@@ -340,7 +261,6 @@ class TabManager {
       const container = document.getElementById('uncategorized-tabs');
       const countEl = document.getElementById('uncategorized-count');
 
-      // 找出未分类的标签
       const categorizedTabIds = new Set();
       const collectTabs = (node) => {
         if (node.tabs) {
@@ -368,6 +288,7 @@ class TabManager {
           <div class="tab-item" data-tab-id="${tab.id}" title="${this.escapeHtml(tab.url)}">
             <img class="tab-favicon" src="${tab.favIconUrl || 'data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2216%22 height=%2216%22><rect width=%2216%22 height=%2216%22 fill=%22%23ddd%22/></svg>'}" alt="" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2216%22 height=%2216%22><rect width=%2216%22 height=%2216%22 fill=%22%23ddd%22/></svg>'">
             <span class="tab-title">${this.escapeHtml(tab.title || tab.url)}</span>
+            <button class="btn-classify" data-tab-id="${tab.id}" data-tab-url="${this.escapeHtml(tab.url)}" data-tab-title="${this.escapeHtml(tab.title)}">🤖</button>
             <span class="tab-close" data-tab-id="${tab.id}">×</span>
           </div>
         `).join('');
@@ -377,13 +298,22 @@ class TabManager {
     }
   }
 
+  renderSettings() {
+    // 设置按钮点击时显示设置对话框
+  }
+
   escapeHtml(text) {
     const div = document.createElement('div');
-    div.textContent = text;
+    div.textContent = text || '';
     return div.innerHTML;
   }
 
   bindEvents() {
+    // 设置按钮
+    document.getElementById('btn-settings').addEventListener('click', () => {
+      this.showSettingsDialog();
+    });
+
     // 新建分类按钮
     document.getElementById('btn-add-category').addEventListener('click', () => {
       this.showAddCategoryDialog();
@@ -412,6 +342,18 @@ class TabManager {
       }
     });
 
+    // 智能分类按钮
+    document.addEventListener('click', async (e) => {
+      if (e.target.classList.contains('btn-classify')) {
+        e.stopPropagation();
+        const tabId = parseInt(e.target.dataset.tabId);
+        const tabUrl = e.target.dataset.tabUrl;
+        const tabTitle = e.target.dataset.tabTitle;
+        
+        await this.classifyTab(tabId, tabUrl, tabTitle);
+      }
+    });
+
     // 标签关闭
     document.addEventListener('click', async (e) => {
       if (e.target.classList.contains('tab-close')) {
@@ -419,7 +361,7 @@ class TabManager {
         const tabId = parseInt(e.target.dataset.tabId);
         try {
           await chrome.tabs.remove(tabId);
-          await this.loadCurrentTabs();
+          await this.loadData();
           this.render();
         } catch (error) {
           console.error('Failed to close tab:', error);
@@ -441,13 +383,95 @@ class TabManager {
     document.getElementById('btn-cancel-category').addEventListener('click', () => {
       document.getElementById('dialog-add-category').close();
     });
+
+    // 设置表单
+    document.getElementById('form-settings').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      await this.saveSettings();
+    });
+
+    document.getElementById('btn-cancel-settings').addEventListener('click', () => {
+      document.getElementById('dialog-settings').close();
+    });
+  }
+
+  async classifyTab(tabId, tabUrl, tabTitle) {
+    const btn = document.querySelector(`.btn-classify[data-tab-id="${tabId}"]`);
+    const originalText = btn.textContent;
+    
+    try {
+      btn.textContent = '⏳';
+      btn.disabled = true;
+
+      // 发送消息给后台服务
+      const response = await chrome.runtime.sendMessage({
+        action: 'classifyWithAI',
+        tab: { id: tabId, url: tabUrl, title: tabTitle }
+      });
+
+      if (response.success) {
+        const classification = response.result;
+        
+        // 创建分类路径
+        const categoryId = this.tree.createCategoryPath(classification.category);
+        
+        // 添加标签到分类
+        const tab = await chrome.tabs.get(tabId);
+        this.tree.addTab(categoryId, tab);
+        
+        // 保存
+        await this.saveData();
+        
+        // 重新渲染
+        this.render();
+        
+        console.log(`Tab classified to: ${classification.category}`);
+      } else {
+        alert('分类失败: ' + response.error);
+      }
+    } catch (error) {
+      console.error('Classification failed:', error);
+      alert('分类失败: ' + error.message);
+    } finally {
+      btn.textContent = originalText;
+      btn.disabled = false;
+    }
+  }
+
+  async showSettingsDialog() {
+    const dialog = document.getElementById('dialog-settings');
+    const data = await this.storage.getAll();
+    
+    document.getElementById('setting-api-key').value = data.settings.apiKey || '';
+    document.getElementById('setting-api-endpoint').value = data.settings.apiEndpoint || 'https://api.deepseek.com/v1/chat/completions';
+    document.getElementById('setting-model').value = data.settings.model || 'deepseek-chat';
+    
+    dialog.showModal();
+  }
+
+  async saveSettings() {
+    const apiKey = document.getElementById('setting-api-key').value.trim();
+    const apiEndpoint = document.getElementById('setting-api-endpoint').value.trim();
+    const model = document.getElementById('setting-model').value.trim();
+    
+    const data = await this.storage.getAll();
+    data.settings = {
+      ...data.settings,
+      apiKey,
+      apiEndpoint,
+      model
+    };
+    
+    await this.storage.saveAll(data);
+    
+    document.getElementById('dialog-settings').close();
+    alert('设置已保存');
   }
 
   showAddCategoryDialog() {
     const dialog = document.getElementById('dialog-add-category');
     const select = document.getElementById('category-parent');
     
-    // 填充父分类选项
     const categories = this.tree.getAllCategories();
     select.innerHTML = `
       <option value="root">根目录</option>
@@ -456,7 +480,6 @@ class TabManager {
       `).join('')}
     `;
 
-    // 清空表单
     document.getElementById('category-name').value = '';
     document.getElementById('category-domains').value = '';
 
@@ -479,33 +502,10 @@ class TabManager {
       .filter(d => d.length > 0);
 
     try {
-      // 添加到树
-      const newNode = this.tree.addCategory(parentId, {
-        name,
-        domains
-      });
-
-      // 保存到存储
+      this.tree.addCategory(parentId, { name, domains });
       await this.saveData();
-
-      // 如果有域名，添加规则
-      if (domains.length > 0) {
-        const pattern = new RegExp(domains.join('|').replace(/\./g, '\\.'));
-        this.rules.addRule({
-          name: name,
-          pattern: pattern,
-          categoryId: newNode.id,
-          priority: 1
-        });
-      }
-
-      // 重新渲染
       this.render();
-
-      // 关闭对话框
       document.getElementById('dialog-add-category').close();
-      
-      console.log(`Category "${name}" added under parent ${parentId}`);
     } catch (error) {
       console.error('Failed to add category:', error);
       alert('添加分类失败: ' + error.message);
