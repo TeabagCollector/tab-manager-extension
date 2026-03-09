@@ -1,6 +1,6 @@
 /**
- * Popup 主逻辑 - 智能分类版本 v0.2.5
- * 新增：已分类标签可以重新分类
+ * Popup 主逻辑 - 智能分类版本 v0.2.6
+ * 修复：移动失败错误 + 分类选择器逻辑 + GLM模型错误处理
  */
 
 // ========== 工具类 ==========
@@ -52,6 +52,8 @@ class CategoryTree {
     
     for (const part of parts) {
       const parent = this.findNode(currentId);
+      if (!parent) break;
+      
       let found = parent.children.find(c => c.name === part);
       
       if (!found) {
@@ -91,26 +93,38 @@ class CategoryTree {
   moveTabToCategory(tabId, targetCategoryId) {
     const targetCategory = this.findNode(targetCategoryId);
     if (!targetCategory) {
+      console.error('Target category not found:', targetCategoryId);
       return false;
     }
 
     let tabData = null;
-    const findTab = (node) => {
-      const index = node.tabs.findIndex(t => t.id === tabId);
-      if (index !== -1) {
-        tabData = node.tabs[index];
-        node.tabs.splice(index, 1);
-        return true;
+    let found = false;
+    
+    const findAndRemove = (node) => {
+      if (found) return;
+      
+      if (node.tabs) {
+        const index = node.tabs.findIndex(t => t.id === tabId);
+        if (index !== -1) {
+          tabData = node.tabs[index];
+          node.tabs.splice(index, 1);
+          found = true;
+          return;
+        }
       }
+      
       if (node.children) {
-        return node.children.some(child => findTab(child));
+        for (const child of node.children) {
+          findAndRemove(child);
+          if (found) return;
+        }
       }
-      return false;
     };
 
-    findTab(this.root);
+    findAndRemove(this.root);
 
     if (!tabData) {
+      console.error('Tab not found in any category:', tabId);
       return false;
     }
 
@@ -120,9 +134,11 @@ class CategoryTree {
 
   removeTabFromAll(tabId) {
     const removeRecursive = (node) => {
-      const index = node.tabs.findIndex(t => t.id === tabId);
-      if (index !== -1) {
-        node.tabs.splice(index, 1);
+      if (node.tabs) {
+        const index = node.tabs.findIndex(t => t.id === tabId);
+        if (index !== -1) {
+          node.tabs.splice(index, 1);
+        }
       }
       if (node.children) {
         node.children.forEach(child => removeRecursive(child));
@@ -153,22 +169,28 @@ class CategoryTree {
     return categories;
   }
 
+  // 获取有标签的分类（用于移动对话框）
   getAllCategoriesForMove() {
+    return this.getAllCategories();
+  }
+
+  // 获取所有分类包括空的（用于新建分类时选择父分类）
+  getAllCategoriesIncludingEmpty() {
     const categories = [];
     
-    const traverse = (node, level = 0, parentPath = []) => {
+    const traverse = (node, level = 0) => {
       if (node.id !== 'root') {
         categories.push({
           id: node.id,
           name: node.name,
           level,
-          path: [...parentPath, node.name].join(' > ')
+          hasTabs: node.tabs && node.tabs.length > 0
         });
       }
       
-      if (node.children && node.children.length > 0) {
+      if (node.children) {
         for (const child of node.children) {
-          traverse(child, level + 1, node.id === 'root' ? [] : [...parentPath, node.name]);
+          traverse(child, level + 1);
         }
       }
     };
@@ -177,7 +199,6 @@ class CategoryTree {
     return categories;
   }
 
-  // 查找标签所在的分类
   findTabCategory(tabId) {
     let foundCategory = null;
     
@@ -261,7 +282,7 @@ class StorageManager {
       },
       cache: {},
       stats: {},
-      version: '0.2.5',
+      version: '0.2.6',
       createdAt: Date.now()
     };
   }
@@ -439,22 +460,18 @@ class TabManager {
   }
 
   bindEvents() {
-    // 一键分类按钮
     document.getElementById('btn-classify-all').addEventListener('click', () => {
       this.classifyAllTabs();
     });
 
-    // 设置按钮
     document.getElementById('btn-settings').addEventListener('click', () => {
       this.showSettingsDialog();
     });
 
-    // 新建分类按钮
     document.getElementById('btn-add-category').addEventListener('click', () => {
       this.showAddCategoryDialog();
     });
 
-    // 分类折叠
     document.getElementById('tree-container').addEventListener('click', (e) => {
       const header = e.target.closest('.category-header');
       if (header && !e.target.classList.contains('tab-close') && !e.target.classList.contains('btn-move') && !e.target.classList.contains('btn-reclassify')) {
@@ -463,7 +480,6 @@ class TabManager {
       }
     });
 
-    // 已分类标签点击跳转
     document.getElementById('tree-container').addEventListener('click', async (e) => {
       const tabItem = e.target.closest('.tab-item');
       if (tabItem && !e.target.classList.contains('tab-close') && !e.target.classList.contains('btn-move') && !e.target.classList.contains('btn-reclassify')) {
@@ -477,7 +493,6 @@ class TabManager {
       }
     });
 
-    // 未分类标签点击跳转
     document.getElementById('uncategorized-tabs').addEventListener('click', async (e) => {
       const tabItem = e.target.closest('.tab-item');
       if (tabItem && !e.target.classList.contains('tab-close') && !e.target.classList.contains('btn-classify') && !e.target.classList.contains('btn-move')) {
@@ -491,7 +506,6 @@ class TabManager {
       }
     });
 
-    // 移动标签按钮
     document.addEventListener('click', async (e) => {
       if (e.target.classList.contains('btn-move')) {
         e.stopPropagation();
@@ -500,22 +514,18 @@ class TabManager {
       }
     });
 
-    // 分类/重新分类按钮
     document.addEventListener('click', async (e) => {
       if (e.target.classList.contains('btn-classify') || e.target.classList.contains('btn-reclassify')) {
         e.stopPropagation();
         const tabId = parseInt(e.target.dataset.tabId);
         const tabUrl = e.target.dataset.tabUrl;
         const tabTitle = e.target.dataset.tabTitle;
-        
-        // 判断是重新分类还是首次分类
         const isReclassify = e.target.classList.contains('btn-reclassify');
         
         await this.classifyTab(tabId, tabUrl, tabTitle, isReclassify);
       }
     });
 
-    // 标签关闭
     document.addEventListener('click', async (e) => {
       if (e.target.classList.contains('tab-close')) {
         e.stopPropagation();
@@ -530,12 +540,10 @@ class TabManager {
       }
     });
 
-    // 搜索
     document.getElementById('search-input').addEventListener('input', (e) => {
       this.filterTabs(e.target.value);
     });
 
-    // 新建分类表单
     document.getElementById('form-add-category').addEventListener('submit', async (e) => {
       e.preventDefault();
       await this.addCategory();
@@ -545,7 +553,6 @@ class TabManager {
       document.getElementById('dialog-add-category').close();
     });
 
-    // 设置表单
     document.getElementById('form-settings').addEventListener('submit', async (e) => {
       e.preventDefault();
       await this.saveSettings();
@@ -555,7 +562,6 @@ class TabManager {
       document.getElementById('dialog-settings').close();
     });
 
-    // 清空数据按钮
     document.getElementById('btn-clear-data').addEventListener('click', async () => {
       if (confirm('确定要清空所有数据吗？这将删除所有分类和缓存。')) {
         await chrome.runtime.sendMessage({ action: 'clearAllData' });
@@ -565,7 +571,6 @@ class TabManager {
       }
     });
 
-    // 移动对话框表单
     document.getElementById('form-move').addEventListener('submit', async (e) => {
       e.preventDefault();
       await this.moveTab();
@@ -583,12 +588,13 @@ class TabManager {
     
     tabIdInput.value = tabId;
     
+    // 只获取有标签的分类（不显示空分类）
     const categories = this.tree.getAllCategoriesForMove();
     
     select.innerHTML = `
-      <option value="">-- 选择目标分类 --</option>
+      <option value="">-- 选择已有分类 --</option>
       ${categories.map(cat => `
-        <option value="${cat.id}">${'  '.repeat(cat.level)}${cat.name}</option>
+        <option value="${cat.id}">${'  '.repeat(cat.level)}${cat.name} (${cat.tabs.length})</option>
       `).join('')}
     `;
     
@@ -606,15 +612,23 @@ class TabManager {
       let categoryId = null;
       
       if (newCategoryPath) {
+        // 创建新分类路径
         categoryId = this.tree.createCategoryPath(newCategoryPath);
       } else if (targetCategoryId) {
+        // 使用已有分类
         categoryId = targetCategoryId;
       } else {
         alert('请选择目标分类或输入新分类路径');
         return;
       }
       
+      // 获取标签信息并移动
       const tab = await chrome.tabs.get(tabId);
+      if (!tab) {
+        alert('标签不存在，可能已关闭');
+        return;
+      }
+      
       const success = this.tree.moveTabToCategory(tabId, categoryId);
       
       if (success) {
@@ -623,7 +637,7 @@ class TabManager {
         document.getElementById('dialog-move').close();
         console.log(`Tab ${tabId} moved to category ${categoryId}`);
       } else {
-        alert('移动失败，标签不存在');
+        alert('移动失败：' + (tab ? '目标分类不存在' : '标签不存在'));
       }
     } catch (error) {
       console.error('Failed to move tab:', error);
@@ -642,7 +656,6 @@ class TabManager {
         btn.disabled = true;
       }
 
-      // 如果是重新分类，提示用户
       if (isReclassify) {
         const oldCategory = this.tree.findTabCategory(tabId);
         const oldPath = oldCategory ? this.getCategoryPath(oldCategory.id) : '未知';
@@ -668,11 +681,7 @@ class TabManager {
         await this.saveData();
         this.render();
         
-        if (isReclassify) {
-          console.log(`Tab reclassified to: ${classification.category}`);
-        } else {
-          console.log(`Tab classified to: ${classification.category}`);
-        }
+        console.log(`Tab ${isReclassify ? 're' : ''}classified to: ${classification.category}`);
       } else {
         alert('分类失败: ' + response.error);
       }
@@ -687,14 +696,12 @@ class TabManager {
     }
   }
 
-  // 获取分类的完整路径
   getCategoryPath(categoryId) {
     const path = [];
     let current = this.tree.findNode(categoryId);
     
     while (current && current.id !== 'root') {
       path.unshift(current.name);
-      // 找到父节点
       let parent = null;
       const findParent = (node) => {
         if (node.children && node.children.some(c => c.id === current.id)) {
@@ -825,11 +832,12 @@ class TabManager {
     const dialog = document.getElementById('dialog-add-category');
     const select = document.getElementById('category-parent');
     
-    const categories = this.tree.getAllCategories();
+    // 显示所有分类（包括空的）
+    const categories = this.tree.getAllCategoriesIncludingEmpty();
     select.innerHTML = `
       <option value="root">根目录</option>
       ${categories.map(cat => `
-        <option value="${cat.id}">${'  '.repeat(cat.level)}${cat.name}</option>
+        <option value="${cat.id}">${'  '.repeat(cat.level)}${cat.name}${cat.hasTabs ? '' : ' (空)'}</option>
       `).join('')}
     `;
 
@@ -892,7 +900,6 @@ class TabManager {
   }
 }
 
-// 启动
 document.addEventListener('DOMContentLoaded', () => {
   new TabManager();
 });
